@@ -7,6 +7,7 @@ import { ArrowRight, Database, FlaskConical, Upload } from "lucide-react";
 import { Card, CardHeader, EmptyState, ErrorState, LoadingRows, PageHeader, SentimentBadge, PriorityBadge, StatCard } from "@/components/ui";
 import { HorizontalBars, SentimentDonut } from "@/components/charts";
 import { fmtInt, fmtPct, timeAgo } from "@/lib/format";
+import { fetchJson, FetchError } from "@/lib/fetchJson";
 import type { DashboardMetrics } from "@/lib/metrics";
 
 interface IssueSummary {
@@ -33,20 +34,20 @@ export default function OverviewPage() {
     setLoading(true);
     setError(null);
     try {
-      const [mRes, iRes, fRes] = await Promise.all([
-        fetch("/api/metrics"),
-        fetch("/api/issues?status=open"),
-        fetch("/api/feedback?pageSize=8&sort=newest"),
+      const [m, i, f] = await Promise.all([
+        fetchJson<DashboardMetrics>("/api/metrics"),
+        fetchJson<{ issues: IssueSummary[] }>("/api/issues?status=open"),
+        fetchJson<{ data: typeof recent }>("/api/feedback?pageSize=8&sort=newest"),
       ]);
-      if (!mRes.ok || !iRes.ok || !fRes.ok) throw new Error("One or more requests failed.");
-      const m = (await mRes.json()) as DashboardMetrics;
-      const i = (await iRes.json()) as { issues: IssueSummary[] };
-      const f = (await fRes.json()) as { data: typeof recent };
       setMetrics(m);
       setIssues(i.issues.slice(0, 5));
       setRecent(f.data);
-    } catch {
-      setError("Could not load workspace data. Check that the server is running and try again.");
+    } catch (e) {
+      setError(
+        e instanceof FetchError
+          ? e.message
+          : "Could not load workspace data. Check that the server is running and try again."
+      );
     } finally {
       setLoading(false);
     }
