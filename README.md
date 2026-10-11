@@ -71,7 +71,7 @@ Any Node host works (`npm run build && npm run start`). Notes:
 ## Security notes
 
 - Same-origin app; no CORS, no cookies, no sessions. There is no login system by design (single-workspace demo); protect private deployments with host-level access control.
-- Headers set on all routes: CSP (scripts same-origin only), `nosniff`, `SAMEORIGIN` framing, strict referrer policy, minimal permissions policy, HSTS.
+- Headers set on all routes: CSP (same-origin scripts plus the inline hydration payloads Next.js App Router requires; no raw-HTML sinks exist in the codebase), `nosniff`, `SAMEORIGIN` framing, strict referrer policy, minimal permissions policy, HSTS.
 - Rate limits: analysis 5/min, imports 10/min, submissions 30/min, data delete 5/min (in-memory, per process).
 - All write inputs validated server-side with zod; SQL uses bound parameters; CSV export neutralizes formula injection; malformed JSON returns 400, never stack traces.
 - `npm audit` (Oct 2026): 5 high findings, all confined to the local-only ESLint toolchain (`eslint-config-next` line, no patched release available). No production dependency is affected.
