@@ -26,6 +26,7 @@ const FeedbackSchema = new Schema(
 
 FeedbackSchema.index({ sentiment: 1 });
 FeedbackSchema.index({ sourceCategory: 1 });
+FeedbackSchema.index({ topics: 1 });
 
 export type FeedbackDoc = mongoose.InferSchemaType<typeof FeedbackSchema> & { _id: mongoose.Types.ObjectId };
 export const Feedback = mongoose.models.Feedback ?? mongoose.model("Feedback", FeedbackSchema);

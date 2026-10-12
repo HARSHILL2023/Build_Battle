@@ -1,7 +1,7 @@
 import { Feedback } from "../models/Feedback.js";
 import { ImportRecord } from "../models/ImportRecord.js";
 import { Issue } from "../models/Issue.js";
-import { evaluateQuality } from "./adaption/localAdapter.js";
+import { buildQualityReport, type QualityStats } from "./adaption/localAdapter.js";
 import { topicLabel } from "./topics.js";
 
 export interface DashboardMetrics {
@@ -23,36 +23,135 @@ export interface DashboardMetrics {
   hasTimestamps: false;
 }
 
+// Workspace-global aggregates: identical for every authenticated session
+// (demo and full accounts see the same dashboard), so a short process-local
+// cache is safe. Writes invalidate it explicitly; the TTL is a backstop.
+const METRICS_TTL_MS = 30_000;
+let cached: { expiresAt: number; data: DashboardMetrics } | null = null;
+
+/** Drop the cached dashboard metrics after any workspace write. */
+export function invalidateMetrics(): void {
+  cached = null;
+}
+
 export async function getDashboardMetrics(): Promise<DashboardMetrics> {
-  const total = await Feedback.countDocuments();
-  const uniquePatterns = (await Feedback.distinct("normHash")).length;
-  const duplicateRecords = total - uniquePatterns;
+  const now = Date.now();
+  if (cached && cached.expiresAt > now) return cached.data;
+  const data = await computeDashboardMetrics();
+  cached = { expiresAt: Date.now() + METRICS_TTL_MS, data };
+  return data;
+}
 
-  const statusRows = (await Feedback.aggregate([
-    { $group: { _id: "$analysisStatus", n: { $sum: 1 } } },
-  ])) as { _id: string; n: number }[];
-  let analyzed = 0;
-  let pending = 0;
-  let failed = 0;
-  for (const r of statusRows) {
-    if (r._id === "analyzed") analyzed = r.n;
-    else if (r._id === "failed") failed = r.n;
-    else pending += r.n;
+/**
+ * Quality inputs computed inside MongoDB instead of transferring every
+ * review text to Node. The normalization mirrors normalizeReview exactly:
+ * lowercase, quote stripping, and non-alphanumeric separators all become
+ * single-space-joined [a-z0-9] tokens, so dedup keys match the row-scanning
+ * path. Lengths use code points ($strLenCP), which equal UTF-16 lengths
+ * except for astral-plane characters; the pinned seed test guards the
+ * reported grade.
+ */
+export async function getQualityStats(): Promise<QualityStats> {
+  const rows = (await Feedback.aggregate([
+    {
+      $project: {
+        t: { $trim: { input: { $ifNull: ["$reviewText", ""] } } },
+        c: "$sourceCategory",
+      },
+    },
+    {
+      $project: {
+        t: 1,
+        c: 1,
+        empty: { $eq: ["$t", ""] },
+        len: { $strLenCP: "$t" },
+        tokens: {
+          $map: {
+            input: { $regexFindAll: { input: { $toLower: "$t" }, regex: "[a-z0-9]+" } },
+            in: "$$this.match",
+          },
+        },
+      },
+    },
+    {
+      $project: {
+        empty: 1,
+        len: 1,
+        c: 1,
+        key: {
+          $concat: [
+            {
+              $reduce: {
+                input: "$tokens",
+                initialValue: "",
+                in: { $concat: ["$$value", { $cond: [{ $eq: ["$$value", ""] }, "", " "] }, "$$this"] },
+              },
+            },
+            "||",
+            { $toLower: { $trim: { input: { $ifNull: ["$c", ""] } } } },
+          ],
+        },
+      },
+    },
+    {
+      $group: {
+        _id: null,
+        rawRows: { $sum: 1 },
+        emptySkipped: { $sum: { $cond: ["$empty", 1, 0] } },
+        totalLen: { $sum: { $cond: ["$empty", 0, "$len"] } },
+        categories: { $addToSet: { $cond: ["$empty", null, "$c"] } },
+        keys: { $addToSet: { $cond: ["$empty", null, "$key"] } },
+      },
+    },
+  ])) as {
+    rawRows: number;
+    emptySkipped: number;
+    totalLen: number;
+    categories: (string | null)[];
+    keys: (string | null)[];
+  }[];
+  const agg = rows[0];
+  if (!agg) {
+    return { rawRows: 0, emptySkipped: 0, totalLen: 0, categories: [], uniquePatterns: 0, duplicateRows: 0 };
   }
+  const categories = agg.categories.filter((c): c is string => c !== null);
+  const keys = agg.keys.filter((k): k is string => k !== null);
+  const uniquePatterns = keys.length;
+  return {
+    rawRows: agg.rawRows,
+    emptySkipped: agg.emptySkipped,
+    totalLen: agg.totalLen,
+    categories,
+    uniquePatterns,
+    duplicateRows: Math.max(0, agg.rawRows - uniquePatterns - agg.emptySkipped),
+  };
+}
 
-  const sentimentRows = (await Feedback.aggregate([
-    { $group: { _id: "$sentiment", n: { $sum: 1 } } },
-  ])) as { _id: string | null; n: number }[];
-  const sentiment = { positive: 0, neutral: 0, negative: 0, unanalyzed: 0 };
-  for (const r of sentimentRows) {
-    if (r._id === "positive") sentiment.positive = r.n;
-    else if (r._id === "neutral") sentiment.neutral = r.n;
-    else if (r._id === "negative") sentiment.negative = r.n;
-    else sentiment.unanalyzed += r.n;
-  }
-
-  const byCategory = (
-    (await Feedback.aggregate([
+async function computeDashboardMetrics(): Promise<DashboardMetrics> {
+  // Every read below is independent: one parallel wave instead of eleven
+  // sequential round trips.
+  const [
+    total,
+    uniqueAgg,
+    statusRows,
+    sentimentRows,
+    categoryRows,
+    patternRows,
+    topicRows,
+    qualityStats,
+    issueAgg,
+    importCount,
+    lastImport,
+  ] = await Promise.all([
+    Feedback.countDocuments(),
+    Feedback.aggregate([{ $group: { _id: "$normHash" } }, { $count: "n" }]) as Promise<{ n: number }[]>,
+    Feedback.aggregate([{ $group: { _id: "$analysisStatus", n: { $sum: 1 } } }]) as Promise<
+      { _id: string; n: number }[]
+    >,
+    Feedback.aggregate([{ $group: { _id: "$sentiment", n: { $sum: 1 } } }]) as Promise<
+      { _id: string | null; n: number }[]
+    >,
+    Feedback.aggregate([
       {
         $group: {
           _id: "$sourceCategory",
@@ -63,17 +162,8 @@ export async function getDashboardMetrics(): Promise<DashboardMetrics> {
         },
       },
       { $sort: { total: -1 } },
-    ])) as { _id: string; total: number; negative: number; positive: number; neutral: number }[]
-  ).map((r) => ({
-    category: r._id,
-    total: r.total,
-    negative: r.negative ?? 0,
-    positive: r.positive ?? 0,
-    neutral: r.neutral ?? 0,
-  }));
-
-  const topPatterns = (
-    (await Feedback.aggregate([
+    ]) as Promise<{ _id: string; total: number; negative: number; positive: number; neutral: number }[]>,
+    Feedback.aggregate([
       {
         $group: {
           _id: "$normHash",
@@ -85,54 +175,83 @@ export async function getDashboardMetrics(): Promise<DashboardMetrics> {
       },
       { $sort: { count: -1 } },
       { $limit: 10 },
-    ])) as { _id: string; review: string; category: string; count: number; sentiment: string | null }[]
-  ).map((r) => ({ hash: r._id, review: r.review, category: r.category, count: r.count, sentiment: r.sentiment }));
-
-  const topicRows = (await Feedback.find({ analysisStatus: "analyzed" })
-    .select("topics sentiment normHash")
-    .lean()) as { topics: string[]; sentiment: string | null; normHash: string }[];
-  const topicMap = new Map<string, { raw: number; hashes: Set<string>; negative: number }>();
-  for (const row of topicRows) {
-    const topics = Array.isArray(row.topics) ? row.topics : [];
-    for (const t of topics) {
-      let acc = topicMap.get(t);
-      if (!acc) {
-        acc = { raw: 0, hashes: new Set(), negative: 0 };
-        topicMap.set(t, acc);
-      }
-      acc.raw += 1;
-      acc.hashes.add(row.normHash);
-      if (row.sentiment === "negative") acc.negative += 1;
-    }
-  }
-  const byTopic = [...topicMap.entries()]
-    .map(([topic, v]) => ({ topic, label: topicLabel(topic), raw: v.raw, unique: v.hashes.size, negative: v.negative }))
-    .sort((a, b) => b.raw - a.raw);
-
-  const qualityRows = (await Feedback.find({}).select("reviewText sourceCategory").lean()) as {
-    reviewText: string;
-    sourceCategory: string;
-  }[];
-  const quality = evaluateQuality(
-    qualityRows.map((r) => ({ review_text: r.reviewText, source_category: r.sourceCategory }))
-  );
-
-  const issueAgg = (await Issue.aggregate([
-    {
-      $group: {
-        _id: null,
-        total: { $sum: 1 },
-        high: { $sum: { $cond: [{ $eq: ["$priorityBand", "high"] }, 1, 0] } },
-        open: { $sum: { $cond: [{ $eq: ["$status", "open"] }, 1, 0] } },
+    ]) as Promise<{ _id: string; review: string; category: string; count: number; sentiment: string | null }[]>,
+    Feedback.aggregate([
+      { $match: { analysisStatus: "analyzed" } },
+      { $unwind: "$topics" },
+      {
+        $group: {
+          _id: "$topics",
+          raw: { $sum: 1 },
+          hashes: { $addToSet: "$normHash" },
+          negative: { $sum: { $cond: [{ $eq: ["$sentiment", "negative"] }, 1, 0] } },
+        },
       },
-    },
-  ])) as { total: number; high: number; open: number }[];
-  const issueRows = issueAgg[0] ?? { total: 0, high: 0, open: 0 };
+      { $sort: { raw: -1 } },
+    ]) as Promise<{ _id: string; raw: number; hashes: string[]; negative: number }[]>,
+    getQualityStats(),
+    Issue.aggregate([
+      {
+        $group: {
+          _id: null,
+          total: { $sum: 1 },
+          high: { $sum: { $cond: [{ $eq: ["$priorityBand", "high"] }, 1, 0] } },
+          open: { $sum: { $cond: [{ $eq: ["$status", "open"] }, 1, 0] } },
+        },
+      },
+    ]) as Promise<{ total: number; high: number; open: number }[]>,
+    ImportRecord.countDocuments(),
+    ImportRecord.findOne({}).sort({ sqliteId: -1 }).select("createdAt").lean() as Promise<{
+      createdAt?: Date;
+    } | null>,
+  ]);
 
-  const importCount = await ImportRecord.countDocuments();
-  const lastImport = (await ImportRecord.findOne({}).sort({ sqliteId: -1 }).select("createdAt").lean()) as {
-    createdAt?: Date;
-  } | null;
+  const uniquePatterns = uniqueAgg[0]?.n ?? 0;
+  const duplicateRecords = total - uniquePatterns;
+
+  let analyzed = 0;
+  let pending = 0;
+  let failed = 0;
+  for (const r of statusRows) {
+    if (r._id === "analyzed") analyzed = r.n;
+    else if (r._id === "failed") failed = r.n;
+    else pending += r.n;
+  }
+
+  const sentiment = { positive: 0, neutral: 0, negative: 0, unanalyzed: 0 };
+  for (const r of sentimentRows) {
+    if (r._id === "positive") sentiment.positive = r.n;
+    else if (r._id === "neutral") sentiment.neutral = r.n;
+    else if (r._id === "negative") sentiment.negative = r.n;
+    else sentiment.unanalyzed += r.n;
+  }
+
+  const byCategory = categoryRows.map((r) => ({
+    category: r._id,
+    total: r.total,
+    negative: r.negative ?? 0,
+    positive: r.positive ?? 0,
+    neutral: r.neutral ?? 0,
+  }));
+
+  const topPatterns = patternRows.map((r) => ({
+    hash: r._id,
+    review: r.review,
+    category: r.category,
+    count: r.count,
+    sentiment: r.sentiment,
+  }));
+
+  const byTopic = topicRows.map((r) => ({
+    topic: r._id,
+    label: topicLabel(r._id),
+    raw: r.raw,
+    unique: r.hashes.length,
+    negative: r.negative,
+  }));
+
+  const quality = buildQualityReport(qualityStats);
+  const issueRows = issueAgg[0] ?? { total: 0, high: 0, open: 0 };
 
   return {
     totalRecords: total,

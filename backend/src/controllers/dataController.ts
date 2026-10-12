@@ -5,6 +5,7 @@ import { Issue } from "../models/Issue.js";
 import { AnalysisRun } from "../models/AnalysisRun.js";
 import { AdaptionRun } from "../models/AdaptionRun.js";
 import { asyncHandler } from "../utils/errors.js";
+import { invalidateMetrics } from "../services/metricsService.js";
 
 /** Danger zone: removes all stored workspace data. */
 export const deleteAllData = asyncHandler(async (req: Request, res: Response) => {
@@ -21,6 +22,7 @@ export const deleteAllData = asyncHandler(async (req: Request, res: Response) =>
       AnalysisRun.deleteMany({}),
       AdaptionRun.deleteMany({}),
     ]);
+    invalidateMetrics();
     res.json({ message: "All workspace data was deleted." });
   } catch (err) {
     console.error("DELETE /api/data failed:", err instanceof Error ? err.message : String(err));

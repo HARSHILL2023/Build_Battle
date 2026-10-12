@@ -7,6 +7,7 @@ import { parseFeedbackCsv } from "../utils/csv.js";
 import { asyncHandler } from "../utils/errors.js";
 import { importRow } from "../utils/serialize.js";
 import { reserveSeq } from "../utils/seq.js";
+import { invalidateMetrics } from "../services/metricsService.js";
 
 const CHUNK = 500;
 
@@ -50,6 +51,7 @@ async function summarizeInsert(
     errors: errors.slice(0, 50),
     sqliteId: importSqliteId,
   });
+  invalidateMetrics();
   return {
     importId: importSqliteId,
     filename,

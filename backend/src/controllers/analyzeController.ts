@@ -1,6 +1,7 @@
 import type { Request, Response } from "express";
 import { AnalysisRun } from "../models/AnalysisRun.js";
 import { runAnalysisPipeline, type AnalysisMethod } from "../services/analysisService.js";
+import { invalidateMetrics } from "../services/metricsService.js";
 import { asyncHandler } from "../utils/errors.js";
 import { analysisRunRow } from "../utils/serialize.js";
 
@@ -38,6 +39,7 @@ export const postAnalyze = asyncHandler(async (req: Request, res: Response) => {
     }
     onlyPending = body.onlyPending === true;
     const summary = await runAnalysisPipeline(method, onlyPending);
+    invalidateMetrics();
     res.json(summary);
   } catch (err) {
     console.error("POST /api/analyze failed:", err instanceof Error ? err.message : String(err));

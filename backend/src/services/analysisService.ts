@@ -112,62 +112,91 @@ export async function runAnalysisPipeline(
     const batch = await analyzeBatchOpenAI(texts);
     providerError = batch.error;
     const batchResults = batch.results;
+    // Group identical outcomes so one bulkWrite replaces hundreds of
+    // sequential per-pattern updateMany round trips. Counts stay per
+    // pattern, exactly as before.
+    const groups = new Map<string, { hashes: string[]; set: Record<string, unknown>; patterns: number; failed: boolean }>();
+    const groupFor = (key: string, set: Record<string, unknown>, failed: boolean): { hashes: string[] } => {
+      let g = groups.get(key);
+      if (!g) {
+        g = { hashes: [], set, patterns: 0, failed };
+        groups.set(key, g);
+      }
+      g.patterns += 1;
+      return g;
+    };
     for (let i = 0; i < patternRows.length; i++) {
       const pattern = patternRows[i];
       const result = batchResults.get(i);
       if (!result) {
         // Fall back per-item so one provider failure never blocks the run.
         const fallback = analyzeDeterministic(pattern.reviewText);
-        const res = await Feedback.updateMany(
-          { normHash: pattern._id },
-          {
-            $set: {
-              sentiment: fallback.sentiment,
-              sentimentMethod: "deterministic:keyword-rules-v1 (openai fallback)",
-              topics: fallback.topics,
-              analysisStatus: "analyzed",
-            },
-          }
-        );
-        rowsUpdated += res.modifiedCount;
-        failed += 1;
+        groupFor(`fallback:${fallback.sentiment}:${fallback.topics.join(",")}`, {
+          sentiment: fallback.sentiment,
+          sentimentMethod: "deterministic:keyword-rules-v1 (openai fallback)",
+          topics: fallback.topics,
+          analysisStatus: "analyzed",
+        }, true).hashes.push(pattern._id);
         continue;
       }
-      const res = await Feedback.updateMany(
-        { normHash: pattern._id },
-        {
-          $set: {
-            sentiment: result.sentiment,
-            sentimentMethod: providerName,
-            topics: result.topics,
-            analysisStatus: "analyzed",
-          },
-        }
+      groupFor(`ok:${result.sentiment}:${result.topics.join(",")}`, {
+        sentiment: result.sentiment,
+        sentimentMethod: providerName,
+        topics: result.topics,
+        analysisStatus: "analyzed",
+      }, false).hashes.push(pattern._id);
+    }
+    if (groups.size > 0) {
+      const bulk = await Feedback.bulkWrite(
+        [...groups.values()].map((g) => ({
+          updateMany: { filter: { normHash: { $in: g.hashes } }, update: { $set: g.set } },
+        }))
       );
-      rowsUpdated += res.modifiedCount;
-      succeeded += 1;
+      rowsUpdated += bulk.modifiedCount;
+      for (const g of groups.values()) {
+        succeeded += g.failed ? 0 : g.patterns;
+        failed += g.failed ? g.patterns : 0;
+      }
     }
   } else {
+    const groups = new Map<string, { hashes: string[]; set: Record<string, unknown>; patterns: number }>();
+    const failedHashes: string[] = [];
     for (const pattern of patternRows) {
       try {
         const result = analyzeDeterministic(pattern.reviewText);
-        const res = await Feedback.updateMany(
-          { normHash: pattern._id },
-          {
-            $set: {
+        const key = `${result.sentiment}:${result.topics.join(",")}`;
+        let g = groups.get(key);
+        if (!g) {
+          g = {
+            hashes: [],
+            set: {
               sentiment: result.sentiment,
               sentimentMethod: providerName,
               topics: result.topics,
               analysisStatus: "analyzed",
             },
-          }
-        );
-        rowsUpdated += res.modifiedCount;
-        succeeded += 1;
+            patterns: 0,
+          };
+          groups.set(key, g);
+        }
+        g.hashes.push(pattern._id);
+        g.patterns += 1;
       } catch {
-        await Feedback.updateMany({ normHash: pattern._id }, { $set: { analysisStatus: "failed" } });
-        failed += 1;
+        failedHashes.push(pattern._id);
       }
+    }
+    if (groups.size > 0) {
+      const bulk = await Feedback.bulkWrite(
+        [...groups.values()].map((g) => ({
+          updateMany: { filter: { normHash: { $in: g.hashes } }, update: { $set: g.set } },
+        }))
+      );
+      rowsUpdated += bulk.modifiedCount;
+      for (const g of groups.values()) succeeded += g.patterns;
+    }
+    if (failedHashes.length > 0) {
+      await Feedback.updateMany({ normHash: { $in: failedHashes } }, { $set: { analysisStatus: "failed" } });
+      failed += failedHashes.length;
     }
   }
 

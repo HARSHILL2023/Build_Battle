@@ -61,27 +61,22 @@ export function prepareForAnalysis(
   return { prepared, rawRows, uniquePatterns: prepared.length, duplicateRows: rawRows - prepared.length };
 }
 
-export function evaluateQuality(
-  rows: { review_text: string; source_category: string }[]
-): QualityReport {
-  const rawRows = rows.length;
-  const seen = new Map<string, number>();
-  const categories = new Set<string>();
-  let totalLen = 0;
-  let emptySkipped = 0;
-  for (const row of rows) {
-    const text = row.review_text?.trim() ?? "";
-    if (!text) {
-      emptySkipped += 1;
-      continue;
-    }
-    totalLen += text.length;
-    categories.add(row.source_category);
-    const key = `${normalizeReview(text)}||${row.source_category.trim().toLowerCase()}`;
-    seen.set(key, (seen.get(key) ?? 0) + 1);
-  }
-  const uniquePatterns = seen.size;
-  const duplicateRows = Math.max(0, rawRows - uniquePatterns - emptySkipped);
+export interface QualityStats {
+  rawRows: number;
+  emptySkipped: number;
+  totalLen: number;
+  categories: string[];
+  uniquePatterns: number;
+  duplicateRows: number;
+}
+
+/**
+ * Score math shared by the row-scanning evaluateQuality (used by the
+ * analysis pipeline) and the aggregation-backed getQualityStats (used by
+ * the dashboard). One definition, so both paths grade identically.
+ */
+export function buildQualityReport(s: QualityStats): QualityReport {
+  const { rawRows, emptySkipped, totalLen, categories, uniquePatterns, duplicateRows } = s;
   const duplicationRate = rawRows > 0 ? duplicateRows / rawRows : 0;
   const avgLen = rawRows > 0 ? totalLen / Math.max(1, rawRows - emptySkipped) : 0;
 
@@ -89,7 +84,7 @@ export function evaluateQuality(
   // thin category coverage lower the score.
   let score = 8;
   score -= Math.min(4, duplicationRate * 5);
-  if (categories.size < 3) score -= 1.5;
+  if (categories.length < 3) score -= 1.5;
   if (avgLen < 40) score -= 1;
   if (emptySkipped > rawRows * 0.05) score -= 1;
   score = Math.max(1, Math.min(10, Math.round(score * 10) / 10));
@@ -122,8 +117,8 @@ export function evaluateQuality(
       },
       {
         name: "Category coverage",
-        passed: categories.size >= 3,
-        detail: `${categories.size} distinct source categories: ${[...categories].slice(0, 6).join(", ")}.`,
+        passed: categories.length >= 3,
+        detail: `${categories.length} distinct source categories: ${[...categories].slice(0, 6).join(", ")}.`,
       },
       {
         name: "No timestamps in source",
@@ -133,4 +128,35 @@ export function evaluateQuality(
       },
     ],
   };
+}
+
+export function evaluateQuality(
+  rows: { review_text: string; source_category: string }[]
+): QualityReport {
+  const rawRows = rows.length;
+  const seen = new Map<string, number>();
+  const categories = new Set<string>();
+  let totalLen = 0;
+  let emptySkipped = 0;
+  for (const row of rows) {
+    const text = row.review_text?.trim() ?? "";
+    if (!text) {
+      emptySkipped += 1;
+      continue;
+    }
+    totalLen += text.length;
+    categories.add(row.source_category);
+    const key = `${normalizeReview(text)}||${row.source_category.trim().toLowerCase()}`;
+    seen.set(key, (seen.get(key) ?? 0) + 1);
+  }
+  const uniquePatterns = seen.size;
+  const duplicateRows = Math.max(0, rawRows - uniquePatterns - emptySkipped);
+  return buildQualityReport({
+    rawRows,
+    emptySkipped,
+    totalLen,
+    categories: [...categories],
+    uniquePatterns,
+    duplicateRows,
+  });
 }

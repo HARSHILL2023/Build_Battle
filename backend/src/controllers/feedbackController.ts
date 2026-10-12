@@ -7,6 +7,7 @@ import { hashReview } from "../utils/text.js";
 import { asyncHandler } from "../utils/errors.js";
 import { feedbackRow } from "../utils/serialize.js";
 import { reserveSeq } from "../utils/seq.js";
+import { invalidateMetrics } from "../services/metricsService.js";
 
 const querySchema = z.object({
   q: z.string().max(500).optional().default(""),
@@ -127,6 +128,7 @@ export const createFeedback = asyncHandler(async (req: Request, res: Response) =
       importId: null,
       sqliteId,
     });
+    invalidateMetrics();
     res.status(201).json({ id: sqliteId, message: "Feedback saved." });
   } catch (err) {
     console.error("POST /api/feedback failed:", err instanceof Error ? err.message : String(err));
@@ -173,5 +175,6 @@ export const deleteFeedbackById = asyncHandler(async (req: Request, res: Respons
     res.status(404).json({ error: "Feedback not found." });
     return;
   }
+  invalidateMetrics();
   res.json({ message: "Feedback deleted." });
 });
