@@ -12,10 +12,8 @@
 
 # testing
 /coverage
-
-# next.js
-/.next/
-/out/
+/test-results
+/playwright-report
 
 # production
 /build
@@ -46,6 +44,16 @@ data/
 # vercel
 .vercel
 
+# MERN apps (React+Vite frontend, Express backend)
+frontend/node_modules/
+frontend/dist/
+frontend/coverage/
+frontend/test-results/
+frontend/playwright-report/
+backend/node_modules/
+backend/dist/
+backend/coverage/
+*.tsbuildinfo
+
 # typescript
 *.tsbuildinfo
-next-env.d.ts
