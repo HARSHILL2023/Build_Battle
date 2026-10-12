@@ -52,7 +52,11 @@ export function frontendOrigins(): string[] {
   const raw = process.env.FRONTEND_ORIGIN ?? "http://localhost:5173";
   return raw
     .split(",")
-    .map((s) => s.trim())
+    // Browsers send Origin as a bare scheme://host[:port] with no trailing
+    // slash, but dashboard values are often pasted with one. Normalize so an
+    // exact allowlist entry still matches instead of failing every CORS
+    // check (and every CSRF origin check) with no headers at all.
+    .map((s) => s.trim().replace(/\/+$/, ""))
     .filter((s) => s.length > 0);
 }
 

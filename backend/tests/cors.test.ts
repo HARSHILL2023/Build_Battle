@@ -15,7 +15,9 @@ let prevFrontendOrigin: string | undefined;
 
 beforeAll(async () => {
   prevFrontendOrigin = process.env.FRONTEND_ORIGIN;
-  process.env.FRONTEND_ORIGIN = `${PROD_ORIGIN},${PREVIEW_ORIGIN}`;
+  // Deliberately messy (trailing slashes, stray spaces) like pasted
+  // dashboard values: the parser must still match the bare browser Origin.
+  process.env.FRONTEND_ORIGIN = `${PROD_ORIGIN}/ , ${PREVIEW_ORIGIN}/`;
   resetRateLimitBuckets();
   ctx = await startTestApp();
 });
@@ -81,6 +83,17 @@ describe("credentialed cross-origin requests", () => {
     const res = await request(ctx.app).get("/api/health");
     expect(res.status).toBe(200);
     expect(res.body.ok).toBe(true);
+  });
+
+  it("returns 401 WITH CORS headers for unauthenticated session probes", async () => {
+    // Production regression: GET /api/auth/me answered 401 without
+    // Access-Control-Allow-Origin, so the browser reported a CORS error
+    // instead of the real auth status. CORS runs before auth, so an
+    // allowlisted origin is echoed even on rejection responses.
+    const res = await request(ctx.app).get("/api/auth/me").set("Origin", PROD_ORIGIN);
+    expect(res.status).toBe(401);
+    expect(res.headers["access-control-allow-origin"]).toBe(PROD_ORIGIN);
+    expect(res.headers["access-control-allow-credentials"]).toBe("true");
   });
 
   it("completes demo entry with cookies and keeps CSRF enforced", async () => {
