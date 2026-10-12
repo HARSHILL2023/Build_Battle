@@ -5,6 +5,7 @@ import {
   demoLogin,
   fetchJson,
   login,
+  normalizeBaseUrl,
   resolveApiUrl,
   csvUrl,
   setCsrfToken,
@@ -143,5 +144,59 @@ describe("auth requests", () => {
     expect(calls.length).toBe(2);
     expect(calls[1].url).toBe(`${API_BASE_URL}/api/auth/demo`);
     expect(calls[1].init?.credentials).toBe("include");
+  });
+});
+
+describe("base URL normalization", () => {
+  // Production incident: VITE_API_URL held the full CSRF endpoint URL, so
+  // every call stacked into .../api/auth/csrf/api/... Only the origin is
+  // ever meaningful because all endpoints use absolute /api/* paths.
+  it("discards a pasted endpoint path, keeping just the origin", () => {
+    expect(normalizeBaseUrl("https://build-battle-8mqs.onrender.com/api/auth/csrf")).toBe(
+      "https://build-battle-8mqs.onrender.com"
+    );
+    expect(normalizeBaseUrl("https://build-battle-8mqs.onrender.com/api/")).toBe(
+      "https://build-battle-8mqs.onrender.com"
+    );
+  });
+
+  it("keeps documented bare origins untouched", () => {
+    expect(normalizeBaseUrl("http://localhost:5000")).toBe("http://localhost:5000");
+    expect(normalizeBaseUrl("https://build-battle-8mqs.onrender.com")).toBe(
+      "https://build-battle-8mqs.onrender.com"
+    );
+    expect(normalizeBaseUrl("https://build-battle-8mqs.onrender.com///")).toBe(
+      "https://build-battle-8mqs.onrender.com"
+    );
+  });
+
+  it("falls back to localhost when unset or blank", () => {
+    expect(normalizeBaseUrl(undefined)).toBe("http://localhost:5000");
+    expect(normalizeBaseUrl("   ")).toBe("http://localhost:5000");
+  });
+
+  it("resolves auth endpoints without duplicated paths under a poisoned base", async () => {
+    vi.resetModules();
+    vi.stubEnv(
+      "VITE_API_URL",
+      "https://build-battle-8mqs.onrender.com/api/auth/csrf"
+    );
+    try {
+      const mod = await import("./api/client");
+      for (const path of [
+        "/api/auth/me",
+        "/api/auth/csrf",
+        "/api/auth/login",
+        "/api/auth/logout",
+        "/api/auth/demo",
+      ]) {
+        const url = mod.resolveApiUrl(path);
+        expect(url).toBe(`https://build-battle-8mqs.onrender.com${path}`);
+        expect(url).not.toContain("/api/auth/csrf/api/");
+      }
+    } finally {
+      vi.unstubAllEnvs();
+      vi.resetModules();
+    }
   });
 });

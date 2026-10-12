@@ -15,9 +15,28 @@
  * via `/api`. Paths starting with `/api` are resolved against the base.
  */
 
-export const API_BASE_URL =
-  (import.meta.env.VITE_API_URL as string | undefined)?.replace(/\/$/, "") ||
-  "http://localhost:5000";
+const LOCAL_FALLBACK = "http://localhost:5000";
+
+/**
+ * Normalize the configured base URL. Every endpoint uses an absolute /api/*
+ * path, so only the origin (scheme + host + port) is meaningful: any pasted
+ * path suffix (for example a full .../api/auth/csrf endpoint URL) is
+ * discarded instead of being stacked under every request, which otherwise
+ * produces unusable .../api/auth/csrf/api/... URLs.
+ */
+export function normalizeBaseUrl(raw: string | undefined): string {
+  const trimmed = (raw ?? "").trim().replace(/\/+$/, "");
+  if (!trimmed) return LOCAL_FALLBACK;
+  try {
+    return new URL(trimmed).origin;
+  } catch {
+    return trimmed;
+  }
+}
+
+export const API_BASE_URL = normalizeBaseUrl(
+  import.meta.env.VITE_API_URL as string | undefined
+);
 
 export const CSRF_HEADER = "x-csrf-token";
 
