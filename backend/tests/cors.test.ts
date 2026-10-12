@@ -6,9 +6,17 @@ import { startTestApp, stopTestApp, type TestContext } from "./helpers";
 // Production CORS contract: the API echoes back an exact configured origin
 // with credentials enabled, and never a wildcard. FRONTEND_ORIGIN accepts a
 // comma-separated list so preview deployments are added explicitly.
-const PROD_ORIGIN = "https://build-battle-frontend.vercel.app";
+const PROD_ORIGIN = "https://buildbattle-frontend.vercel.app";
 const PREVIEW_ORIGIN = "https://insightflow-git-preview-1a2b3c.vercel.app";
 const EVIL_ORIGIN = "https://evil.example";
+// Exact browser Origin from the production incident: a Vercel deployment URL
+// that shares a name prefix with the stable URL but is NOT allowlisted. It
+// must stay rejected until an operator explicitly lists it.
+const UNLISTED_DEPLOYMENT_ORIGIN =
+  "https://buildbattle-frontend-9qlb4m9v2-harshilpatels-projects-e1a200a3.vercel.app";
+// Same registrable suffix, different site: proves there is no *.vercel.app
+// suffix matching anywhere in the CORS or CSRF checks.
+const UNLISTED_LOOKALIKE_ORIGIN = "https://buildbattle-frontend-evil.vercel.app";
 
 let ctx: TestContext;
 let prevFrontendOrigin: string | undefined;
@@ -63,6 +71,38 @@ describe("CORS preflight", () => {
     expect(res.status).not.toBe(204);
     expect(res.headers["access-control-allow-origin"]).toBeUndefined();
     expect(res.headers["access-control-allow-credentials"]).toBeUndefined();
+  });
+});
+
+describe("untrusted deployment origins stay rejected", () => {
+  it.each([UNLISTED_DEPLOYMENT_ORIGIN, UNLISTED_LOOKALIKE_ORIGIN])(
+    "refuses preflight from %s without echoing it",
+    async (origin) => {
+      const res = await request(ctx.app)
+        .options("/api/auth/demo")
+        .set("Origin", origin)
+        .set("Access-Control-Request-Method", "POST")
+        .set("Access-Control-Request-Headers", "content-type, x-csrf-token");
+      expect(res.status).not.toBe(204);
+      expect(res.headers["access-control-allow-origin"]).toBeUndefined();
+      expect(res.headers["access-control-allow-credentials"]).toBeUndefined();
+    }
+  );
+
+  it("answers the incident deployment URL without CORS headers", async () => {
+    // Documents the reported production symptom as an allowlist miss, not a
+    // middleware bug: unlisted origins get the real status but no echo.
+    const me = await request(ctx.app)
+      .get("/api/auth/me")
+      .set("Origin", UNLISTED_DEPLOYMENT_ORIGIN);
+    expect(me.status).toBe(401);
+    expect(me.headers["access-control-allow-origin"]).toBeUndefined();
+
+    const csrf = await request(ctx.app)
+      .get("/api/auth/csrf")
+      .set("Origin", UNLISTED_DEPLOYMENT_ORIGIN);
+    expect(csrf.status).toBe(200);
+    expect(csrf.headers["access-control-allow-origin"]).toBeUndefined();
   });
 });
 

@@ -7,7 +7,7 @@ import { startTestApp, stopTestApp, type TestContext } from "./helpers";
 // Production cookie contract: cross-site session auth (Vercel frontend,
 // Render backend) requires SameSite=None with Secure, or browsers silently
 // drop the session cookie and every login/demo attempt fails.
-const PROD_ORIGIN = "https://build-battle-frontend.vercel.app";
+const PROD_ORIGIN = "https://buildbattle-frontend.vercel.app";
 
 let ctx: TestContext;
 const prev: Record<string, string | undefined> = {};
