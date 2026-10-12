@@ -53,7 +53,7 @@ function readError(body: unknown, fallback: string): string {
 /** Fetch (or reuse) the synchronizer CSRF token for this session. */
 export async function getCsrfToken(forceRefresh = false): Promise<string> {
   if (csrfToken && !forceRefresh) return csrfToken;
-  const res = await fetch(resolveApiUrl("/api/auth/csrf"), { credentials: "include" });
+  const res = await sendRequest(resolveApiUrl("/api/auth/csrf"), { credentials: "include" });
   if (!res.ok) {
     throw new FetchError("Could not start a session. Check that the server is running.", res.status);
   }
@@ -75,6 +75,20 @@ function networkError(err: unknown): never {
     throw new FetchError("The request timed out. Check that the server is running and try again.");
   }
   throw new FetchError("The network request failed. Check the connection and try again.");
+}
+
+/**
+ * Raw fetch rejections (CORS block, DNS failure, backend down) surface as
+ * TypeError("Failed to fetch"). Normalize them to FetchError so callers that
+ * use fetch directly (login, demo, logout, CSRF mint) report the same
+ * actionable message as fetchJson/mutateJson instead of the raw browser text.
+ */
+async function sendRequest(input: string, init?: RequestInit): Promise<Response> {
+  try {
+    return await fetch(input, init);
+  } catch (err) {
+    networkError(err);
+  }
 }
 
 async function parseBody<T>(res: Response): Promise<T | null> {
@@ -220,7 +234,7 @@ export async function getSession(): Promise<SessionUser | null> {
 
 export async function login(email: string, password: string): Promise<SessionUser> {
   const token = await getCsrfToken();
-  const res = await fetch(resolveApiUrl("/api/auth/login"), {
+  const res = await sendRequest(resolveApiUrl("/api/auth/login"), {
     method: "POST",
     headers: { "Content-Type": "application/json", [CSRF_HEADER]: token },
     credentials: "include",
@@ -242,7 +256,7 @@ export async function login(email: string, password: string): Promise<SessionUse
 export async function logout(): Promise<void> {
   const token = await getCsrfToken();
   try {
-    await fetch(resolveApiUrl("/api/auth/logout"), {
+    await sendRequest(resolveApiUrl("/api/auth/logout"), {
       method: "POST",
       headers: { [CSRF_HEADER]: token },
       credentials: "include",
@@ -255,7 +269,7 @@ export async function logout(): Promise<void> {
 /** Passwordless demo entry ("Try Live Demo"). Same session + CSRF rotation as login. */
 export async function demoLogin(): Promise<SessionUser> {
   const token = await getCsrfToken();
-  const res = await fetch(resolveApiUrl("/api/auth/demo"), {
+  const res = await sendRequest(resolveApiUrl("/api/auth/demo"), {
     method: "POST",
     headers: { "Content-Type": "application/json", [CSRF_HEADER]: token },
     credentials: "include",

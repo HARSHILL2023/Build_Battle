@@ -16,8 +16,10 @@ export async function startTestApp(): Promise<TestContext> {
   const mongod = await MongoMemoryServer.create();
   const uri = mongod.getUri();
   process.env.MONGODB_URI = uri;
-  process.env.SESSION_SECRET = "test-session-secret-0123456789abcdef-test-only";
-  process.env.COOKIE_SECURE = "false";
+  // Respect pre-set values so suites can boot the app under production-like
+  // cookie settings (e.g. COOKIE_SAMESITE=none + COOKIE_SECURE=true).
+  process.env.SESSION_SECRET ??= "test-session-secret-0123456789abcdef-test-only";
+  process.env.COOKIE_SECURE ??= "false";
   await connectDb(uri);
   const mod = await import("../src/server");
   const app = (mod.app ?? mod.default) as Express;

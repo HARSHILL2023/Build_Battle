@@ -1,6 +1,15 @@
 /** Unit tests for the central API client. */
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { FetchError, fetchJson, resolveApiUrl, csvUrl, API_BASE_URL } from "./api/client";
+import {
+  FetchError,
+  demoLogin,
+  fetchJson,
+  login,
+  resolveApiUrl,
+  csvUrl,
+  setCsrfToken,
+  API_BASE_URL,
+} from "./api/client";
 
 describe("api client", () => {
   beforeEach(() => {
@@ -78,4 +87,61 @@ describe("api client", () => {
     expect(err).toBeInstanceOf(FetchError);
     expect((err as Error).message).toMatch(/timed out/i);
   }, 10000);
+});
+
+describe("auth requests", () => {
+  beforeEach(() => {
+    vi.unstubAllGlobals();
+    setCsrfToken(null);
+  });
+
+  function stubCsrfThen(followUp: (url: string, init?: RequestInit) => Promise<unknown>) {
+    const calls: { url: string; init?: RequestInit }[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((url: string, init?: RequestInit) => {
+        calls.push({ url, init });
+        if (calls.length === 1) {
+          return Promise.resolve({
+            ok: true,
+            status: 200,
+            json: () => Promise.resolve({ csrfToken: "csrf-0" }),
+          });
+        }
+        return followUp(url, init);
+      })
+    );
+    return calls;
+  }
+
+  it("maps a failed CSRF mint to FetchError, not raw Failed to fetch", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => Promise.reject(new TypeError("Failed to fetch")))
+    );
+    const err = await login("a@example.com", "password").catch((e) => e);
+    expect(err).toBeInstanceOf(FetchError);
+    expect((err as Error).message).toMatch(/network/i);
+  });
+
+  it("maps a failed login POST to FetchError and sends cookies plus CSRF", async () => {
+    const calls = stubCsrfThen(() => Promise.reject(new TypeError("Failed to fetch")));
+    const err = await login("a@example.com", "password").catch((e) => e);
+    expect(err).toBeInstanceOf(FetchError);
+    expect((err as Error).message).toMatch(/network/i);
+    expect(calls.length).toBe(2);
+    expect(calls[1].url).toBe(`${API_BASE_URL}/api/auth/login`);
+    expect(calls[1].init?.credentials).toBe("include");
+    expect((calls[1].init?.headers as Record<string, string>)["x-csrf-token"]).toBe("csrf-0");
+  });
+
+  it("maps a failed demo POST to FetchError against the demo endpoint", async () => {
+    const calls = stubCsrfThen(() => Promise.reject(new TypeError("Failed to fetch")));
+    const err = await demoLogin().catch((e) => e);
+    expect(err).toBeInstanceOf(FetchError);
+    expect((err as Error).message).toMatch(/network/i);
+    expect(calls.length).toBe(2);
+    expect(calls[1].url).toBe(`${API_BASE_URL}/api/auth/demo`);
+    expect(calls[1].init?.credentials).toBe("include");
+  });
 });

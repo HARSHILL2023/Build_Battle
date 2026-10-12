@@ -1,6 +1,6 @@
 import session from "express-session";
 import MongoStore from "connect-mongo";
-import { getEnv } from "../config/env.js";
+import { frontendOrigins, getEnv } from "../config/env.js";
 
 declare module "express-session" {
   interface SessionData {
@@ -20,6 +20,14 @@ export function sessionMiddleware() {
   const maxAgeMs = env.SESSION_MAX_AGE_HOURS * 3_600_000;
   if (env.COOKIE_SAMESITE === "none" && !env.COOKIE_SECURE) {
     throw new Error("COOKIE_SAMESITE=none requires COOKIE_SECURE=true (browsers reject otherwise).");
+  }
+  if (env.COOKIE_SAMESITE !== "none" && frontendOrigins().some((o) => o.startsWith("https://"))) {
+    // SameSite=lax/strict cookies are never sent on cross-site fetch, so a
+    // production frontend on another host would silently lose its session.
+    console.warn(
+      "[insightflow] HTTPS frontend origin with COOKIE_SAMESITE!=none: browsers will drop the " +
+        "session cookie on cross-site API calls. Set COOKIE_SAMESITE=none and COOKIE_SECURE=true."
+    );
   }
   return session({
     name: SESSION_COOKIE_NAME,

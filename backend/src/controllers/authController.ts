@@ -47,10 +47,16 @@ function regenerate(req: Request): Promise<void> {
 }
 
 function destroy(req: Request, res: Response): Promise<void> {
-  const name = "insightflow.sid";
+  const env = getEnv();
   return new Promise((resolve) => {
     req.session.destroy(() => {
-      res.clearCookie(name, { path: "/" });
+      // Clearing must repeat the cookie attributes, otherwise browsers keep
+      // a SameSite=None; Secure cookie and the user stays logged in.
+      res.clearCookie("insightflow.sid", {
+        path: "/",
+        sameSite: env.COOKIE_SAMESITE,
+        secure: env.COOKIE_SECURE,
+      });
       resolve();
     });
   });

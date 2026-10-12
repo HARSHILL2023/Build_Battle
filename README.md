@@ -71,8 +71,8 @@ No key is ever sent to the browser, logged, or included in API responses. Settin
 MERN deployment (frontend and backend hosted separately; Vercel-style static hosts suit the frontend, a persistent Node host suits the backend — do not assume one serverless host fits both):
 
 - **Database:** MongoDB Atlas or self-hosted; set backend `MONGODB_URI`. Run `npm run migrate -- --sqlite <sqlite-path>` once against the production database (upserts on `sqliteId`, safe to retry).
-- **Backend:** `npm run build:mern`, serve `backend/dist` with `node`; set `MONGODB_URI`, `FRONTEND_ORIGIN` (production frontend URL), `OPENAI_API_KEY` / `ADAPTION_API_KEY` in the host dashboard, never in the repo. Health check: `GET /api/health`.
-- **Frontend:** static build from `frontend/dist`; set `VITE_API_URL` to the backend URL at build time.
+- **Backend:** `npm run build:mern`, serve `backend/dist` with `node`; set `MONGODB_URI`, `FRONTEND_ORIGIN` (production frontend URL), `OPENAI_API_KEY` / `ADAPTION_API_KEY` in the host dashboard, never in the repo. Health check: `GET /api/health`. Current production (Render): `FRONTEND_ORIGIN=https://build-battle-frontend.vercel.app`, `COOKIE_SAMESITE=none`, `COOKIE_SECURE=true`, `NODE_ENV=production`. Append preview URLs comma-separated when needed: `FRONTEND_ORIGIN=https://build-battle-frontend.vercel.app,https://<preview>.vercel.app`.
+- **Frontend:** static build from `frontend/dist`; set `VITE_API_URL` to the backend URL at build time. `VITE_*` values bake in at build time, so redeploy after changing them. Current production (Vercel): `VITE_API_URL=https://build-battle-8mqs.onrender.com`.
 - **Custom domain:** point DNS to the hosts and attach the domain in the host dashboards; domain connection is a manual step (see DEMO.md launch checklist).
 - **Cross-site cookies:** the frontend and backend live on different hosts, so the backend needs `FRONTEND_ORIGIN=<public frontend URL>`, `COOKIE_SAMESITE=none`, `COOKIE_SECURE=true` (both hosts serve HTTPS).
 
