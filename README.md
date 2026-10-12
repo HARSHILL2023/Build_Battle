@@ -4,52 +4,58 @@ Customer-feedback intelligence for Build Battle 2026. InsightFlow turns raw revi
 
 Every figure in the product is computed from stored records. No fake metrics, no invented trends.
 
-## Quick start
+## MERN stack (current)
 
-Requirements: Node.js 20 or later, npm.
+The app runs as two packages: `frontend/` (React + Vite + TypeScript, port 5173) and `backend/` (Express + TypeScript + Mongoose, port 5000). The UI is unchanged.
 
 ```bash
 cd insightflow
-npm install
-cp .env.example .env   # then fill in keys you have; all are optional
-npm run dev            # http://localhost:3000
+npm --prefix backend install
+npm --prefix frontend install
+cp backend/.env.example backend/.env     # set MONGODB_URI (required)
+cp frontend/.env.example frontend/.env   # VITE_API_URL, default http://localhost:5000
+# migrate existing SQLite records into MongoDB (repeatable, never modifies SQLite):
+npm run migrate -- --sqlite ./data/insightflow.db
+npm run dev:backend    # http://localhost:5000
+npm run dev:frontend   # http://localhost:5173
 ```
 
-Load data: open the app, choose **Load 500-row sample** or **Load full dataset (7,000)** on the empty-state card, or import your own CSV in **Feedback**. Then press **Run analysis** in **AI Insights**.
+Useful scripts (root forwards to the MERN packages):
 
-Useful scripts:
+| Command            | Purpose                                              |
+| ------------------ | ---------------------------------------------------- |
+| `npm run dev:backend` / `dev:frontend` | Dev servers for each package      |
+| `npm run build:mern` | Production builds (backend `tsc`, frontend `tsc` + Vite) |
+| `npm run test:mern` | Backend + frontend Vitest suites                |
+| `npm run migrate`  | SQLite → MongoDB migration (`--sqlite <path>`)       |
+| `npm run backup`   | Read-only SQLite backup into `backups/` (git-ignored) |
 
-| Command        | Purpose                                    |
-| -------------- | ------------------------------------------ |
-| `npm run dev`  | Development server                         |
-| `npm run build`| Production build (also type-checks)        |
-| `npm run start`| Serve the production build                 |
-| `npm run lint` | ESLint                                     |
-| `npm test`     | Vitest suite (32 tests: parsing, AI rules, pipeline, rate limits) |
+## Authentication
+
+Session-cookie login with HttpOnly cookies, per-session CSRF tokens, bcrypt password hashing, login rate limiting with account lockout, and administrator-only destructive operations. A passwordless **Try Live Demo** entry signs visitors into a shared read-only demo account: demo sessions can read everything but every write is rejected server-side (403). Create the first admin with `npm --prefix backend run create-admin`. Server secrets live only in `backend/.env` (git-ignored, see `backend/.env.example`); the frontend uses only `VITE_API_URL`, never secrets.
 
 ## Configuration
 
-All variables are optional and server-side only. Copy `.env.example` to `.env`; never commit `.env`.
+Copy `backend/.env.example` to `backend/.env` (never commit `.env`); optionally copy `frontend/.env.example` to `frontend/.env` to override `VITE_API_URL`.
 
 | Variable             | Purpose                                                                 |
 | -------------------- | ----------------------------------------------------------------------- |
 | `OPENAI_API_KEY`     | Enables the `gpt-4o-mini` sentiment/topic classifier. Without it, the clearly labeled deterministic rules engine is used. |
 | `ADAPTION_API_KEY`   | Enables live Adaption Adaptive Data calls. Without it, the clearly labeled local preparation adapter runs the same documented steps offline. |
 | `ADAPTION_BASE_URL`  | Adaption REST base URL. Default `https://api.adaptionlabs.ai`.          |
-| `INSIGHTFLOW_DB_PATH`| SQLite file path. Default `./data/insightflow.db` (git-ignored).       |
+| `INSIGHTFLOW_DB_PATH`| SQLite source path for one-off migration (`npm run migrate -- --sqlite <path>`). Read-only; migration never modifies SQLite. |
+| `MONGODB_URI`        | **Backend (required).** MongoDB connection string, server-side only. Never exposed to the browser. |
+| `FRONTEND_ORIGIN`    | **Backend.** Allowed browser origin(s) for CORS, comma-separated. Default `http://localhost:5173`. |
+| `PORT`               | **Backend.** Default `5000`. |
+| `VITE_API_URL`       | **Frontend.** Express base URL. Default `http://localhost:5000`. No secrets in `VITE_*` vars. |
 
 No key is ever sent to the browser, logged, or included in API responses. Settings shows presence only.
 
 ## Architecture
 
-- **Framework:** Next.js 16 App Router, TypeScript, Tailwind CSS v4, Recharts, Lucide icons.
-- **Storage:** SQLite via `better-sqlite3` (WAL mode). Tables: `feedback` (original text always preserved), `imports`, `issues`, `analysis_runs`, `adaption_runs`. No ORM; parameterized queries throughout.
-- **Analysis pipeline** (`src/lib/ai/pipeline.ts`):
-  1. Adaption preparation: column mapping to a universal classification prompt, prompt deduplication, quality evaluation.
-  2. Each **unique** pattern classified once (OpenAI batch of 25, or deterministic keyword rules), then fanned out to every duplicate row. Provider failures fall back per item and are recorded with the exact error.
-  3. Issues regenerated from stored rows with a documented score: 45% relative frequency + 35% negative share + 20% topic severity. Issue statuses persist across re-runs by title.
-- **Adaption integration** (`src/lib/adaption/`): follows the documented Adaptive Data workflow (column roles, prompt deduplication, quality evaluation). `GET /api/adaption` reports mode honestly; `POST {action: test}` verifies the live API before it is trusted.
-- **API:** thin validated route handlers under `src/app/api/`. CSV import caps at 8 MB / 20,000 rows with per-row errors. Exports guard against spreadsheet formula injection. Expensive endpoints are rate limited per client.
+- **MERN:** `frontend/` React 19 + Vite + React Router + Tailwind v4 + Recharts + Lucide (same UI, same styles); `backend/` Express 5 + TypeScript + Mongoose, routes/controllers/services/models/middleware under `backend/src/`; MongoDB collections `feedbacks`, `importrecords`, `issues`, `analysisruns`, `adaptionruns` with schema validation, indexes, and `sqliteId` idempotency keys for the SQLite migration (`backend/src/scripts/migrate-sqlite.ts`, verified 7,001/7,001 feedback records, retry-safe).
+- **Auth:** server-managed sessions in MongoDB, HttpOnly cookies, per-session CSRF tokens, bcrypt hashing, login rate limiting with lockout, admin-only destructive operations, and a read-only demo account behind `POST /api/auth/demo` (see Authentication above).
+- **Storage:** MongoDB is the live store. The original SQLite database (`data/`, git-ignored) is preserved as the migration source and backup; `scripts/backup.mjs` (`npm run backup`) snapshots it read-only.
 
 ## Data honesty rules (enforced in code and UI)
 
@@ -62,19 +68,22 @@ No key is ever sent to the browser, logged, or included in API responses. Settin
 
 ## Deployment
 
-Any Node host works (`npm run build && npm run start`). Notes:
+MERN deployment (frontend and backend hosted separately; Vercel-style static hosts suit the frontend, a persistent Node host suits the backend — do not assume one serverless host fits both):
 
-- **Persistence:** the SQLite file lives at `INSIGHTFLOW_DB_PATH`. On ephemeral hosts (serverless) use a persistent volume or set the path accordingly, otherwise data resets on redeploy.
-- **Environment:** set `OPENAI_API_KEY` / `ADAPTION_API_KEY` in the host dashboard, never in the repo.
-- **Custom domain:** point DNS to the host and attach the domain in the host dashboard; the app needs no code change. Domain connection is a manual step (see DEMO.md launch checklist).
+- **Database:** MongoDB Atlas or self-hosted; set backend `MONGODB_URI`. Run `npm run migrate -- --sqlite <sqlite-path>` once against the production database (upserts on `sqliteId`, safe to retry).
+- **Backend:** `npm run build:mern`, serve `backend/dist` with `node`; set `MONGODB_URI`, `FRONTEND_ORIGIN` (production frontend URL), `OPENAI_API_KEY` / `ADAPTION_API_KEY` in the host dashboard, never in the repo. Health check: `GET /api/health`.
+- **Frontend:** static build from `frontend/dist`; set `VITE_API_URL` to the backend URL at build time.
+- **Custom domain:** point DNS to the hosts and attach the domain in the host dashboards; domain connection is a manual step (see DEMO.md launch checklist).
+- **Cross-site cookies:** the frontend and backend live on different hosts, so the backend needs `FRONTEND_ORIGIN=<public frontend URL>`, `COOKIE_SAMESITE=none`, `COOKIE_SECURE=true` (both hosts serve HTTPS).
 
 ## Security notes
 
-- Same-origin app; no CORS, no cookies, no sessions. There is no login system by design (single-workspace demo); protect private deployments with host-level access control.
-- Headers set on all routes: CSP (same-origin scripts plus the inline hydration payloads Next.js App Router requires; no raw-HTML sinks exist in the codebase), `nosniff`, `SAMEORIGIN` framing, strict referrer policy, minimal permissions policy, HSTS.
-- Rate limits: analysis 5/min, imports 10/min, submissions 30/min, data delete 5/min (in-memory, per process).
-- All write inputs validated server-side with zod; SQL uses bound parameters; CSV export neutralizes formula injection; malformed JSON returns 400, never stack traces.
-- `npm audit` (Oct 2026): 5 high findings, all confined to the local-only ESLint toolchain (`eslint-config-next` line, no patched release available). No production dependency is affected.
+- Session-cookie authentication with HttpOnly cookies, per-session CSRF tokens, and server-side role checks on every request. Demo sessions are read-only server-side (see Authentication above).
+- MERN hardening: explicit CORS allowlist (`FRONTEND_ORIGIN`), Helmet security headers with CSP on the API, rate limits on sensitive/expensive endpoints, login rate limiting with account lockout, zod-validated inputs with NoSQL-injection-safe query construction, 1 MB JSON / 8 MB CSV upload limits, formula-injection-guarded CSV exports, typed `DELETE ALL DATA` confirmation for destructive operations.
+- Headers set on all API routes: strict CSP, `nosniff`, `SAMEORIGIN` framing, strict referrer policy, minimal permissions policy, HSTS.
+- Rate limits: login 20/min, demo entry 10/min, analysis 5/min, imports 10/min, submissions 30/min, data delete 5/min (in-memory, per process).
+- All write inputs validated server-side with zod; malformed JSON returns 400, never stack traces; 5xx responses are generic.
+- `npm audit --omit=dev` (Oct 2026): 0 vulnerabilities in both MERN packages.
 - Legal pages (`/privacy`, `/terms`) describe actual handling and are marked as drafts needing counsel review.
 
 ## Limitations

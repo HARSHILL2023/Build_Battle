@@ -1,6 +1,6 @@
 # InsightFlow demo script (about 6 minutes)
 
-Setup before the demo: `npm run build && npm run start`, open the app, load the full official dataset in Feedback, run deterministic analysis in AI Insights. Keep Settings open in a second tab for the integration questions.
+Setup (MERN): start MongoDB, run `npm run migrate -- --sqlite ./data/insightflow.db` once, then `npm run dev:backend` (http://localhost:5000) and `npm run dev:frontend` (http://localhost:5173). Open the frontend, load the full official dataset in Feedback, run deterministic analysis in AI Insights. Keep Settings open in a second tab for the integration questions.
 
 ## The flow
 
@@ -23,7 +23,9 @@ Setup before the demo: `npm run build && npm run start`, open the app, load the 
 
 ## Launch checklist (manual steps)
 
-- [ ] Deploy host chosen, `OPENAI_API_KEY` and `ADAPTION_API_KEY` set in host env.
-- [ ] Persistent volume configured for `INSIGHTFLOW_DB_PATH`.
+- [ ] Deploy hosts chosen (static frontend + Node backend), `VITE_API_URL` (frontend build) and `MONGODB_URI` + `FRONTEND_ORIGIN` (backend) set in host env.
+- [ ] `OPENAI_API_KEY` and `ADAPTION_API_KEY` set in backend host env.
+- [ ] Production migration run once against the production database (`npm run migrate -- --sqlite <path>`, counts verified).
 - [ ] Custom domain DNS pointed and attached in host dashboard.
 - [ ] Privacy/Terms reviewed by counsel before production use.
+- [ ] If the deployment is public: add host-level access control or approve a real auth design — the optional API token alone is not a complete authentication system.
